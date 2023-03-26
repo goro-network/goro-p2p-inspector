@@ -1,0 +1,36 @@
+[package]
+name = "goro-p2p-inspector"
+version = "0.1.0"
+edition = "2021"
+authors = ["Aditya Kresna <kresna@gemtek.id>"]
+repository = "https://github.com/goro-network/goro-p2p-inspector"
+categories = ["network-programming", "command-line-utilities"]
+license-file = "LICENSE"
+description = "GoRo Network - LibP2P inspectors (CLI)"
+include = [".cargo/config.toml"]
+publish = true
+
+[dependencies]
+anyhow = { version = "1.0.70", features = ["backtrace"] }
+env_logger = "0.10.0"
+futures = { version = "0.3.27", features = ["write-all-vectored"] }
+libp2p = { version = "0.51.1", features = ["full"] }
+log = { version = "0.4.17", features = [
+    "max_level_debug",
+    "release_max_level_info",
+    "serde",
+    "sval",
+    "value-bag",
+] }
+mimalloc = { version = "0.1.34", default-features = false, features = [
+    "override",
+    "local_dynamic_tls",
+] }
+serde = { version = "1.0.158", features = ["derive"] }
+structopt = { version = "0.3.26", features = [
+    "color",
+    "suggestions",
+    "wrap_help",
+] }
+thiserror = "1.0.40"
+tokio = { version = "1.26.0", features = ["full", "stats"] }
