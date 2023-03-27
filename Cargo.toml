@@ -1,6 +1,6 @@
 [package]
 name = "goro-p2p-inspector"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Aditya Kresna <kresna@gemtek.id>"]
 repository = "https://github.com/goro-network/goro-p2p-inspector"

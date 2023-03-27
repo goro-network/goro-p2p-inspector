@@ -4,6 +4,14 @@ This is a CLI program inspired by [libp2p-lookup](https://github.com/mxinden/lib
 
 ## Installations
 
+[![Crates.io][crates-badge]][crates-url]
+[![MIT licensed][mit-badge]][mit-url]
+
+[crates-badge]: https://img.shields.io/crates/v/goro-p2p-inspector.svg
+[crates-url]: https://crates.io/crates/goro-p2p-inspector
+[mit-badge]: https://img.shields.io/badge/license-MIT-blue.svg
+[mit-url]: https://github.com/goro-network/goro-p2p-inspector/blob/main/LICENSE
+
 First, ensure Rust Toolchain is installed. Then:
 
 ```bash
