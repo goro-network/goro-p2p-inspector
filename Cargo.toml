@@ -6,9 +6,20 @@ authors = ["Aditya Kresna <kresna@gemtek.id>"]
 repository = "https://github.com/goro-network/goro-p2p-inspector"
 categories = ["network-programming", "command-line-utilities"]
 license-file = "LICENSE"
+readme = "README.md"
 description = "GoRo Network - LibP2P inspectors (CLI)"
-include = [".cargo/config.toml"]
+include = [
+    ".cargo/config.toml",
+    "Cargo.lock",
+    "Cargo.toml",
+    "rust-toolchain",
+    "src/*",
+]
 publish = true
+
+[[bin]]
+name = "goro-p2p-inspector"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = { version = "1.0.70", features = ["backtrace"] }
