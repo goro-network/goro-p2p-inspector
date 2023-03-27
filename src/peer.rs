@@ -1,5 +1,4 @@
 use crate::logging::{log_debug, log_info};
-use crate::networks::DHTNetwork;
 use crate::options::Options;
 use futures::executor::block_on;
 use futures::future::Either;
@@ -15,7 +14,10 @@ use libp2p::identify::{
 };
 use libp2p::identity::{Keypair, PublicKey};
 use libp2p::kad::store::MemoryStore;
-use libp2p::kad::{Kademlia, KademliaConfig};
+use libp2p::kad::{
+    GetClosestPeersOk as KademliatGetClosestPeersOk, Kademlia, KademliaConfig, KademliaEvent,
+    ProgressStep as KademliaProgressStep, QueryResult as KademliaQueryResult,
+};
 use libp2p::mplex::{MaxBufferBehaviour as MultiplexMaxBufferBehaviour, MplexConfig};
 use libp2p::noise::{Keypair as NoiseKeypair, NoiseConfig, X25519Spec};
 use libp2p::ping::{Behaviour as PingBehaviour, Config as PingConfig};
@@ -40,8 +42,6 @@ pub(crate) type PeerLookupResult = Result<PeerInfo, PeerLookupError>;
 
 #[derive(Debug, Error)]
 pub(crate) enum PeerLookupError {
-    #[error("Looking up the given peer timed out")]
-    Timeout,
     #[error(transparent)]
     FailedToDialPeer(#[from] SwarmDialError),
     #[error("Failed to find peer on DHT")]
@@ -124,7 +124,7 @@ pub(crate) enum PeerLookupClient {
     },
     Dht {
         swarm: Swarm<PeerLookupBehaviour>,
-        network: DHTNetwork,
+        peer_id: PeerId,
     },
 }
 
@@ -167,8 +167,8 @@ impl PeerLookupClient {
                     peer_id,
                     endpoint,
                     num_established,
-                    concurrent_dial_errors: _,
                     established_in,
+                    ..
                 } => {
                     assert_eq!(Into::<u32>::into(num_established), 1);
 
@@ -207,12 +207,87 @@ impl PeerLookupClient {
         }
     }
 
+    async fn lookup_via_dht(
+        swarm: &mut Swarm<PeerLookupBehaviour>,
+        target_peer_id: PeerId,
+    ) -> PeerLookupResult {
+        swarm.behaviour_mut().dht.get_closest_peers(target_peer_id);
+
+        loop {
+            match swarm
+                .next()
+                .await
+                .expect("Programmatic error: infinite streams!")
+            {
+                SwarmEvent::ConnectionEstablished {
+                    peer_id,
+                    num_established,
+                    established_in,
+                    endpoint,
+                    ..
+                } => {
+                    assert_eq!(Into::<u32>::into(num_established), 1);
+
+                    if peer_id == target_peer_id {
+                        match endpoint {
+                            ConnectedPoint::Dialer { address, .. } => {
+                                let address_string =
+                                    address.to_string().replace(&peer_id.to_string(), "");
+                                log_info!("Connection established in {established_in:?} for \"{peer_id}\" (via \"{address_string}\")");
+                            }
+                            ConnectedPoint::Listener {
+                                local_addr,
+                                send_back_addr,
+                            } => {
+                                log_info!("Connection established in {established_in:?} for \"{peer_id}\" (via \"{local_addr}\" with send back address \"{send_back_addr}\")");
+                            }
+                        }
+
+                        return Self::wait_for_indentication(swarm, peer_id).await;
+                    }
+                }
+                SwarmEvent::Behaviour(PeerLookupBehaviourEvent::Dht(
+                    KademliaEvent::OutboundQueryProgressed {
+                        result: KademliaQueryResult::Bootstrap(_),
+                        ..
+                    },
+                )) => {
+                    panic!("Unexpected bootstrap in Kademlia rooting!");
+                }
+                SwarmEvent::Behaviour(PeerLookupBehaviourEvent::Dht(
+                    KademliaEvent::OutboundQueryProgressed {
+                        result:
+                            KademliaQueryResult::GetClosestPeers(Ok(KademliatGetClosestPeersOk {
+                                peers,
+                                ..
+                            })),
+                        step: KademliaProgressStep { count: _, last },
+                        ..
+                    },
+                )) => {
+                    if peers.contains(&target_peer_id) {
+                        if !Swarm::is_connected(swarm, &target_peer_id) {
+                            Swarm::dial(swarm, target_peer_id).unwrap();
+                        }
+
+                        return Self::wait_for_indentication(swarm, target_peer_id).await;
+                    }
+
+                    if last {
+                        return Err(PeerLookupError::FailedToFindPeerOnDht);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     pub(crate) fn create_from_options() -> Self {
-        let (destination_address, network) = match Options::from_args() {
+        let (destination_address, dht_network) = match Options::from_args() {
             Options::Dht {
                 peer_id,
                 dht_network,
-            } => (None, Some(dht_network)),
+            } => (None, Some((dht_network, peer_id))),
             Options::Direct { address } => (Some(address), None),
         };
 
@@ -276,9 +351,9 @@ impl PeerLookupClient {
             let store = MemoryStore::new(local_peer_id);
             let mut kademlia_config = KademliaConfig::default();
 
-            if let Some(protocol_name) = network
-                .clone()
-                .and_then(|dht_network| dht_network.protocol())
+            if let Some(protocol_name) = dht_network
+                .as_ref()
+                .and_then(|(dht_network, _)| dht_network.protocol())
             {
                 kademlia_config.set_protocol_names(vec![protocol_name.into_bytes().into()]);
             }
@@ -304,12 +379,12 @@ impl PeerLookupClient {
         let mut swarm =
             SwarmBuilder::with_tokio_executor(transport, behaviour, local_peer_id).build();
 
-        if let Some(network) = network.clone() {
+        if let Some((network, peer_id)) = dht_network {
             for (addr, peer_id) in network.bootnodes() {
                 swarm.behaviour_mut().dht.add_address(&peer_id, addr);
             }
 
-            Self::Dht { swarm, network }
+            Self::Dht { swarm, peer_id }
         } else {
             Self::Direct {
                 swarm,
@@ -324,12 +399,7 @@ impl PeerLookupClient {
                 mut swarm,
                 destination,
             } => Self::lookup_directly(&mut swarm, destination).await,
-            Self::Dht {
-                swarm: _,
-                network: _,
-            } => {
-                todo!("DHT network probe is not yet implemented!")
-            }
+            Self::Dht { mut swarm, peer_id } => Self::lookup_via_dht(&mut swarm, peer_id).await,
         }
     }
 }
